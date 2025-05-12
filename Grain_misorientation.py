@@ -12,6 +12,8 @@ from scipy.spatial.transform import Rotation as R
 rotation_state_g1 = {'euler': None, 'rotations': [0, 0, 0], 'custom': 0.0}
 rotation_state_g2 = {'euler': None, 'rotations': [0, 0, 0], 'custom': 0.0}
 
+# Store Sigma axis after calculation
+sigma_axis_global = None
 
 
 
@@ -263,7 +265,7 @@ def is_sigma_boundary(axis, misorientation_angle, structure_type='FCC', angle_th
     return False, None, None, None, None
 
 # 2. Add Cube Drawing
-def draw_cube(canvas, euler_angles, size=80):
+def draw_cube(canvas, euler_angles, size=80, sigma_axis=None):
     canvas.delete("all")
     w, h = canvas.winfo_width(), canvas.winfo_height()
     cx, cy = w/2, h/2
@@ -343,6 +345,21 @@ def draw_cube(canvas, euler_angles, size=80):
             else:
                 canvas.create_line(x1,y1,x2,y2, fill=col,
                                    width=1, dash=(4,2))
+    # 6) Optional: draw Sigma rotation axis (if provided)
+    if sigma_axis is not None:
+        axis_norm = sigma_axis / np.linalg.norm(sigma_axis)
+        axis_len = size * 1.2
+        start = np.array([0, 0, 0])
+        end = axis_len * axis_norm
+
+        # Apply same rotation matrix to axis
+        start_rot = start @ Rm.T
+        end_rot = end @ Rm.T
+        x1, y1 = proj(start_rot)
+        x2, y2 = proj(end_rot)
+
+        canvas.create_line(x1, y1, x2, y2, fill='black', width=3, arrow=tk.LAST)
+        canvas.create_text(x2+5, y2+5, text='Σ axis', fill='black', anchor='nw')
 
 # 3. GUI part
 def calculate_misorientation():
@@ -397,8 +414,16 @@ def calculate_misorientation():
         output_text.insert(tk.END, "\n".join(result))
 
         # Update cubes
-        draw_cube(canvas_g1, euler_grain1)
-        draw_cube(canvas_g2, euler_grain2)
+        global sigma_axis_global
+        if is_sig:
+            sigma_axis_global = standard_axis
+        else:
+            sigma_axis_global = None
+
+        draw_cube(canvas_g1, euler_grain1, sigma_axis=sigma_axis_global)
+        draw_cube(canvas_g2, euler_grain2, sigma_axis=sigma_axis_global)
+
+
 
     except Exception as ex:
         messagebox.showerror("Error", str(ex))
@@ -416,13 +441,13 @@ label_g1 = ttk.Label(frame, text="Grain1 Euler angles (deg, comma-separated):")
 label_g1.grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
 entry_g1 = ttk.Entry(frame, width=30)
 entry_g1.grid(row=0, column=1, padx=5, pady=5)
-entry_g1.insert(0, "294.57,46.91,40.1301")
+entry_g1.insert(0, "189.2,53.8,313.0")
 
 label_g2 = ttk.Label(frame, text="Grain2 Euler angles (deg, comma-separated):")
 label_g2.grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
 entry_g2 = ttk.Entry(frame, width=30)
 entry_g2.grid(row=1, column=1, padx=5, pady=5)
-entry_g2.insert(0, "74.349,25.8538,282.2126")
+entry_g2.insert(0, "246.0,67.9,104.4")
 
 # New threshold inputs
 label_threshold = ttk.Label(frame, text="Angle threshold (deg):")
@@ -478,25 +503,85 @@ updated_g2.grid(row=8, column=1, padx=5, pady=5, sticky=tk.W)
 
 
 def reset_rotation(grain_id):
+    global sigma_axis_global
     state = rotation_state_g1 if grain_id == 1 else rotation_state_g2
     state['rotations'] = [0, 0, 0]
+    state['custom'] = 0.0
+
+    # Reset display
     if grain_id == 1:
         updated_g1.config(text="---")
-        draw_cube(canvas_g1, list(map(float, entry_g1.get().strip().split(','))))
+        custom_rot_g1.config(text="0.0°")
         rot_display_g1.config(text="0°, 0°, 0°")
-
+        base_euler = list(map(float, entry_g1.get().strip().split(',')))
+        draw_cube(canvas_g1, base_euler, sigma_axis=None)
     else:
         updated_g2.config(text="---")
-        draw_cube(canvas_g2, list(map(float, entry_g2.get().strip().split(','))))
-        rot_display_g2.config(text="0°, 0°, 0°")
-    
-    state['custom'] = 0.0
-    if grain_id == 1:
-        custom_rot_g1.config(text="0.0°")
-    else:
         custom_rot_g2.config(text="0.0°")
+        rot_display_g2.config(text="0°, 0°, 0°")
+        base_euler = list(map(float, entry_g2.get().strip().split(',')))
+        draw_cube(canvas_g2, base_euler, sigma_axis=None)
+
+    # Also clear global sigma axis after reset
+    sigma_axis_global = None
+
+def update_sigma_axis_if_possible():
+    global sigma_axis_global
+
+    try:
+        # Try to use updated Euler angles or fall back to entry values
+        euler1 = list(map(float, updated_g1.cget("text").split(',')))
+        euler2 = list(map(float, updated_g2.cget("text").split(',')))
+
+        structure_type = combo_structure.get().strip()
+        angle_threshold = float(entry_threshold.get().strip())
+        tolerance_widening = float(entry_tolerance.get().strip())
+
+        sym_euler2 = compute_symmetry_reduced_orientation(euler1, euler2)
+        axis, mis_ang = misorientation_calc(euler1, sym_euler2)
+        is_sig, sigma_value, deviation, std_axis, predefined_angle = is_sigma_boundary(
+            axis[0], mis_ang,
+            structure_type=structure_type,
+            angle_threshold=angle_threshold,
+            tolerance_widening=tolerance_widening
+        )
+
+        result = []
+        result.append(f"Symmetry-reduced grain2: {np.round(sym_euler2[0], 4)} deg")
+        result.append(f"Misorientation axis (approx.): {np.round(axis[0], 4)}")
+        result.append(f"Misorientation angle (deg): {np.round(mis_ang, 4)}")
+
+        if is_sig:
+            sigma_axis_global = std_axis
+            result.append(f"**This is a Σ{sigma_value} boundary**")
+            result.append(f"Deviation from exact Σ boundary angle: {np.round(deviation, 4)} deg")
+            result.append(f"Standard axis for Σ{sigma_value}: {std_axis}")
+            result.append(f"Standard angle for Σ{sigma_value}: {predefined_angle} deg")
+            std_euler_angles = crystal_rotation(euler1, std_axis, predefined_angle)
+            dev_axis, dev_angle = misorientation_calc(sym_euler2, std_euler_angles)
+            result.append(f"Additional deviation from exact orientation: {np.round(dev_angle,4)} deg, deviation axis: {np.round(dev_axis[0],4)}.")
+        else:
+            sigma_axis_global = None
+            result.append("This is not a recognized low Σ boundary.")
+
+        # Update both cubes
+        draw_cube(canvas_g1, euler1, sigma_axis=sigma_axis_global)
+        draw_cube(canvas_g2, euler2, sigma_axis=sigma_axis_global)
+
+        # Update text
+        output_text.delete('1.0', tk.END)
+        output_text.insert(tk.END, "\n".join(result))
+
+    except Exception as e:
+        sigma_axis_global = None
+        output_text.delete('1.0', tk.END)
+        output_text.insert(tk.END, f"Error: {str(e)}")
+
+
+
 
 def rotate_grain(grain_id, axis_vec, axis_index, direction, is_linked_call=False):
+    global sigma_axis_global
     try:
         step = float(entry_step.get())
         angle = step * direction
@@ -530,7 +615,6 @@ def rotate_grain(grain_id, axis_vec, axis_index, direction, is_linked_call=False
             R_custom = axis_angle_to_rotation_matrix(axis_vec, total_angle)
             R_final = R_custom @ R_base
 
-
         def rotmat_to_euler(R):
             Phi = np.arccos(R[2,2])
             if abs(Phi) < 1e-6:
@@ -546,22 +630,26 @@ def rotate_grain(grain_id, axis_vec, axis_index, direction, is_linked_call=False
 
         new_euler = rotmat_to_euler(R_final)
         label.config(text=",".join([f"{x:.2f}" for x in new_euler]))
-        draw_cube(canvas, new_euler)
 
-        # Update cumulative rotation label
+
+
+        # Draw with possible Σ axis
+        draw_cube(canvas, new_euler, sigma_axis=sigma_axis_global)
+        #Update global sigma axis if both orientations are ready
+        update_sigma_axis_if_possible()
         def fmt_rot(rlist): return ", ".join([f"{r:.1f}°" for r in rlist])
         if grain_id == 1:
             rot_display_g1.config(text=fmt_rot(state['rotations']))
         else:
             rot_display_g2.config(text=fmt_rot(state['rotations']))
 
-        # Handle linked rotation if not already from a linked call
         if link_var.get() and not is_linked_call:
             other_id = 2 if grain_id == 1 else 1
             rotate_grain(other_id, axis_vec, axis_index, direction, is_linked_call=True)
 
     except Exception as e:
         messagebox.showerror("Error", str(e))
+
 def rotate_custom_axis(grain_id, direction):
     try:
         step = float(entry_step.get())
@@ -583,7 +671,7 @@ def rotate_custom_axis(grain_id, direction):
         rotate_grain(grain_id, axis, axis_index=-1, direction=direction)
         display = custom_rot_g1 if grain_id == 1 else custom_rot_g2
         display.config(text=f"{state['custom']:.1f}°")
-
+        
         # Handle link
         if link_var.get():
             other_id = 2 if grain_id == 1 else 1
@@ -592,6 +680,8 @@ def rotate_custom_axis(grain_id, direction):
             rotate_grain(other_id, axis, axis_index=-1, direction=0)
             other_display = custom_rot_g2 if grain_id == 1 else custom_rot_g1
             other_display.config(text=f"{other_state['custom']:.1f}°")
+        global sigma_axis_global
+        sigma_axis_global = None
 
     except Exception as e:
         messagebox.showerror("Invalid axis", str(e))
