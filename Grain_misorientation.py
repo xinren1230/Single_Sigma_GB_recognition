@@ -694,7 +694,7 @@ check_link.grid(row=11, column=0, columnspan=2, padx=5, pady=5, sticky=tk.W)
 #  rotation panel on the right
 rotation_panel = ttk.Frame(root, padding="10")
 rotation_panel.grid(row=0, column=1, rowspan=3, sticky=(tk.N, tk.S))
-axes = {'x': ([1, 0, 0], 0), 'y': ([0, 1, 0], 1), 'z': ([0, 0, 1], 2)}
+axes = {'x (β)': ([1, 0, 0], 0), 'y (α)': ([0, 1, 0], 1), 'z': ([0, 0, 1], 2)}
 for i, (label, (vec, idx)) in enumerate(axes.items()):
     ttk.Button(rotation_panel, text=f"+{label}",
                command=lambda v=vec, ix=idx: rotate_grain(1, v, ix, +1)).grid(row=i+1, column=0, padx=2, pady=2)
